@@ -239,11 +239,20 @@ class VAEDecoder(torch.nn.Module):
         )
         self.dropout = dropout
 
+    # def encode(self, x):
+    #     # Encode node embeddings into mean and log variance for latent space
+    #     h = F.relu(self.mu(x))
+    #     logvar = self.logvar(x)
+    #     return h, logvar
+
     def encode(self, x):
+        # Convert list of node embeddings to a single Tensor
+        x = torch.cat(x, dim=0)  # Concatenate embeddings along dimension 0 
         # Encode node embeddings into mean and log variance for latent space
         h = F.relu(self.mu(x))
         logvar = self.logvar(x)
         return h, logvar
+        
 
     def reset_parameters(self):
         # Initialize weights and biases for layers
