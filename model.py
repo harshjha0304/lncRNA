@@ -245,6 +245,10 @@ class VAEDecoder(torch.nn.Module):
         logvar = self.logvar(x)
         return h, logvar
 
+    def reset_parameters(self):
+        # Initialize weights and biases for layers
+        self.fc.reset_parameters()  # Example if using nn.Linear
+
     def reparameterize(self, mu, logvar):
         # Sample from the latent space using the reparameterization trick
         std = torch.exp(0.5 * logvar)
