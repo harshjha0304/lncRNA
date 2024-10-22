@@ -111,6 +111,40 @@ def evaluate_auc(train_pred, train_true, val_pred, val_true, test_pred, test_tru
     return results
 
 
+# def train(model, predictor, data, split_edge, optimizer, args):
+#     model.train()
+#     predictor.train()
+
+#     adj, edge_index, edge_index_mask = edgemask_um(args.mask_ratio, split_edge, data.x.device, data.num_nodes)
+#     pre_edge_index = adj.to(data.x.device)
+#     pos_train_edge = edge_index_mask
+
+#     optimizer.zero_grad()
+#     h = model(data.x, pre_edge_index)
+#     edge = pos_train_edge
+#     pos_out = predictor(h, edge)
+#     pos_loss = -torch.log(pos_out + 1e-15).mean()
+
+#     new_edge_index, _ = add_self_loops(edge_index.cpu())
+#     edge = negative_sampling(
+#         new_edge_index, num_nodes=data.num_nodes,
+#         num_neg_samples=pos_train_edge.shape[1])
+
+#     edge = edge.to(data.x.device)
+
+#     neg_out = predictor(h, edge)
+#     neg_loss = -torch.log(1 - neg_out + 1e-15).mean()
+
+#     loss = pos_loss + neg_loss
+#     loss.backward()
+
+#     torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+#     torch.nn.utils.clip_grad_norm_(predictor.parameters(), 1.0)
+
+#     optimizer.step()
+
+#     return loss.item()
+
 def train(model, predictor, data, split_edge, optimizer, args):
     model.train()
     predictor.train()
@@ -120,30 +154,27 @@ def train(model, predictor, data, split_edge, optimizer, args):
     pos_train_edge = edge_index_mask
 
     optimizer.zero_grad()
-    h = model(data.x, pre_edge_index)
-    edge = pos_train_edge
-    pos_out = predictor(h, edge)
-    pos_loss = -torch.log(pos_out + 1e-15).mean()
+    h = model(data.x, pre_edge_index)  # Get node embeddings
 
-    new_edge_index, _ = add_self_loops(edge_index.cpu())
-    edge = negative_sampling(
-        new_edge_index, num_nodes=data.num_nodes,
-        num_neg_samples=pos_train_edge.shape[1])
-
-    edge = edge.to(data.x.device)
-
-    neg_out = predictor(h, edge)
-    neg_loss = -torch.log(1 - neg_out + 1e-15).mean()
-
-    loss = pos_loss + neg_loss
+    # Use VAE to predict edges
+    reconstructed, mu, logvar = predictor(h)
+    
+    # Positive edge loss (reconstruction)
+    pos_loss = F.binary_cross_entropy_with_logits(reconstructed, torch.ones_like(reconstructed))
+    
+    # KL Divergence loss for VAE regularization
+    kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+    
+    # Combine losses
+    loss = pos_loss + kl_loss
     loss.backward()
-
-    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-    torch.nn.utils.clip_grad_norm_(predictor.parameters(), 1.0)
 
     optimizer.step()
 
     return loss.item()
+
+
+
 
 
 @torch.no_grad()
@@ -279,7 +310,7 @@ def main():
 
     metric = 'AUC'
     if args.use_sage == 'SAGE':
-        model = SAGE(data.num_features, args.hidden_channels,
+    model = SAGE(data.num_features, args.hidden_channels,
                      args.hidden_channels, args.num_layers,
                      args.dropout).to(device)
     elif args.use_sage == 'GIN':
@@ -291,8 +322,9 @@ def main():
                     args.hidden_channels, args.num_layers,
                     args.dropout).to(device)
 
-    predictor = LPDecoder(args.hidden_channels, args.decode_channels, 1, args.num_layers,
-                          args.decode_layers, args.dropout, de_v=args.de_v).to(device)
+# Replace LPDecoder with VAEDecoder
+predictor = VAEDecoder(args.hidden_channels, args.decode_channels, latent_dim=64, 
+                       num_layers=args.num_layers, dropout=args.dropout).to(device)
 
     for run in range(args.runs):
         model.reset_parameters()
