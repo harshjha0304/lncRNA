@@ -178,45 +178,84 @@ class GCN_mgaev3(torch.nn.Module):
         return x
 
 
-class LPDecoder(torch.nn.Module):
-    def __init__(self, in_channels, hidden_channels, out_channels, encoder_layer, num_layers,
-                 dropout, de_v='v1'):
-        super(LPDecoder, self).__init__()
-        n_layer = encoder_layer * encoder_layer
-        self.lins = torch.nn.ModuleList()
-        if de_v == 'v1':
-            self.lins.append(torch.nn.Linear(in_channels * n_layer, hidden_channels))
-            for _ in range(num_layers - 2):
-                self.lins.append(torch.nn.Linear(hidden_channels, hidden_channels))
-            self.lins.append(torch.nn.Linear(hidden_channels, out_channels))
-        else:
-            self.lins.append(torch.nn.Linear(in_channels * n_layer, in_channels * n_layer))
-            self.lins.append(torch.nn.Linear(in_channels * n_layer, hidden_channels))
-            self.lins.append(torch.nn.Linear(hidden_channels, out_channels))
+# class LPDecoder(torch.nn.Module):
+#     def __init__(self, in_channels, hidden_channels, out_channels, encoder_layer, num_layers,
+#                  dropout, de_v='v1'):
+#         super(LPDecoder, self).__init__()
+#         n_layer = encoder_layer * encoder_layer
+#         self.lins = torch.nn.ModuleList()
+#         if de_v == 'v1':
+#             self.lins.append(torch.nn.Linear(in_channels * n_layer, hidden_channels))
+#             for _ in range(num_layers - 2):
+#                 self.lins.append(torch.nn.Linear(hidden_channels, hidden_channels))
+#             self.lins.append(torch.nn.Linear(hidden_channels, out_channels))
+#         else:
+#             self.lins.append(torch.nn.Linear(in_channels * n_layer, in_channels * n_layer))
+#             self.lins.append(torch.nn.Linear(in_channels * n_layer, hidden_channels))
+#             self.lins.append(torch.nn.Linear(hidden_channels, out_channels))
 
+#         self.dropout = dropout
+
+#     def reset_parameters(self):
+#         for lin in self.lins:
+#             lin.reset_parameters()
+
+#     def cross_layer(self, x_1, x_2):
+#         bi_layer = []
+#         for i in range(len(x_1)):
+#             xi = x_1[i]
+#             for j in range(len(x_2)):
+#                 xj = x_2[j]
+#                 bi_layer.append(torch.mul(xi, xj))
+#         bi_layer = torch.cat(bi_layer, dim=1)
+#         return bi_layer
+
+#     def forward(self, h, edge):
+#         src_x = [h[i][edge[0]] for i in range(len(h))]
+#         dst_x = [h[i][edge[1]] for i in range(len(h))]
+#         x = self.cross_layer(src_x, dst_x)
+#         for lin in self.lins[:-1]:
+#             x = lin(x)
+#             x = F.relu(x)
+#             x = F.dropout(x, p=self.dropout, training=self.training)
+#         x = self.lins[-1](x)
+#         return torch.sigmoid(x)
+
+
+class VAEDecoder(torch.nn.Module):
+    def __init__(self, in_channels, hidden_channels, latent_dim, num_layers, dropout):
+        super(VAEDecoder, self).__init__()
+        self.lins = torch.nn.ModuleList()
+        
+        # Layers to compute mean and log-variance of latent space
+        self.mu = Linear(hidden_channels, latent_dim)
+        self.logvar = Linear(hidden_channels, latent_dim)
+        
+        # Decoder: decode from latent space back to edge prediction
+        self.decoder_lins = Sequential(
+            Linear(latent_dim, hidden_channels),
+            torch.nn.ReLU(),
+            Linear(hidden_channels, in_channels)
+        )
         self.dropout = dropout
 
-    def reset_parameters(self):
-        for lin in self.lins:
-            lin.reset_parameters()
+    def encode(self, x):
+        # Encode node embeddings into mean and log variance for latent space
+        h = F.relu(self.mu(x))
+        logvar = self.logvar(x)
+        return h, logvar
 
-    def cross_layer(self, x_1, x_2):
-        bi_layer = []
-        for i in range(len(x_1)):
-            xi = x_1[i]
-            for j in range(len(x_2)):
-                xj = x_2[j]
-                bi_layer.append(torch.mul(xi, xj))
-        bi_layer = torch.cat(bi_layer, dim=1)
-        return bi_layer
+    def reparameterize(self, mu, logvar):
+        # Sample from the latent space using the reparameterization trick
+        std = torch.exp(0.5 * logvar)
+        eps = torch.randn_like(std)
+        return mu + eps * std
 
-    def forward(self, h, edge):
-        src_x = [h[i][edge[0]] for i in range(len(h))]
-        dst_x = [h[i][edge[1]] for i in range(len(h))]
-        x = self.cross_layer(src_x, dst_x)
-        for lin in self.lins[:-1]:
-            x = lin(x)
-            x = F.relu(x)
-            x = F.dropout(x, p=self.dropout, training=self.training)
-        x = self.lins[-1](x)
-        return torch.sigmoid(x)
+    def decode(self, z):
+        # Decode latent variable back into edge predictions
+        return self.decoder_lins(z)
+
+    def forward(self, h):
+        mu, logvar = self.encode(h)
+        z = self.reparameterize(mu, logvar)
+        return self.decode(z), mu, logvar
